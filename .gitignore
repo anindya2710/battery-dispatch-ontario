@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
+# raw price files are downloaded, not committed (see data/README.md)
+data/raw/*.csv
+# runs on made-up prices are not results
+results/synthetic/

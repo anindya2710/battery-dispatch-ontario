@@ -24,6 +24,15 @@ import pandas as pd
 HOURS = 24
 
 
+PREDISPATCH_COLUMNS = {1: "Hour 1 Predispatch", 2: "Hour 2 Predispatch", 3: "Hour 3 Predispatch"}
+
+
+def _read_ieso(path) -> pd.DataFrame:
+    raw = pd.read_csv(Path(path), comment="\\", skip_blank_lines=True)
+    raw.columns = [c.strip() for c in raw.columns]
+    return raw
+
+
 def load_ieso_hoep(path) -> pd.DataFrame:
     """Read an IESO yearly HOEP file into a table with one row per day and 24 hour columns.
 
@@ -31,26 +40,44 @@ def load_ieso_hoep(path) -> pd.DataFrame:
     Raises ValueError if any day is incomplete or any price is missing, because a
     silent gap would shift every later hour.
     """
-    raw = pd.read_csv(Path(path), comment="\\", skip_blank_lines=True)
-    raw.columns = [c.strip() for c in raw.columns]
-    missing_cols = {"Date", "Hour", "HOEP"} - set(raw.columns)
-    if missing_cols:
-        raise ValueError(f"{path}: expected columns Date, Hour, HOEP; missing {sorted(missing_cols)}")
+    return _ieso_table(_read_ieso(path), "HOEP", path, allow_missing=False)
 
-    df = raw[["Date", "Hour", "HOEP"]].copy()
+
+def load_ieso_predispatch(path) -> dict:
+    """The pre-dispatch prices in the same file, as {1: table, 2: table, 3: table}.
+
+    "Hour k Predispatch" for hour h is IESO's projection of the price for hour h,
+    published k hours before hour h starts. So at the start of hour h a trader
+    already knows the 1-hour-ahead price for h, the 2-hour-ahead price for h+1
+    and the 3-hour-ahead price for h+2, all published during hour h-1.
+    Returns None if the file has no pre-dispatch columns. Missing values are kept
+    as NaN; the strategies fill them with the persistence forecast.
+    """
+    raw = _read_ieso(path)
+    if not set(PREDISPATCH_COLUMNS.values()) <= set(raw.columns):
+        return None
+    return {k: _ieso_table(raw, col, path, allow_missing=True) for k, col in PREDISPATCH_COLUMNS.items()}
+
+
+def _ieso_table(raw: pd.DataFrame, column: str, path, allow_missing: bool) -> pd.DataFrame:
+    missing_cols = {"Date", "Hour", column} - set(raw.columns)
+    if missing_cols:
+        raise ValueError(f"{path}: expected columns Date, Hour, {column}; missing {sorted(missing_cols)}")
+
+    df = raw[["Date", "Hour", column]].copy()
     df["Date"] = pd.to_datetime(df["Date"]).dt.date
     df["Hour"] = df["Hour"].astype(int)
     # tolerate prices written with a thousands separator, e.g. "1,234.56"
-    df["HOEP"] = pd.to_numeric(df["HOEP"].astype(str).str.replace(",", "", regex=False), errors="coerce")
-    if df["HOEP"].isna().any():
-        bad = df[df["HOEP"].isna()].head(5)
-        raise ValueError(f"{path}: missing HOEP values, e.g.\n{bad}")
+    df[column] = pd.to_numeric(df[column].astype(str).str.replace(",", "", regex=False), errors="coerce")
+    if not allow_missing and df[column].isna().any():
+        bad = df[df[column].isna()].head(5)
+        raise ValueError(f"{path}: missing {column} values, e.g.\n{bad}")
     if df.duplicated(["Date", "Hour"]).any():
         raise ValueError(f"{path}: duplicate Date/Hour rows")
 
-    table = df.pivot(index="Date", columns="Hour", values="HOEP")
+    table = df.pivot(index="Date", columns="Hour", values=column)
     expected = list(range(1, HOURS + 1))
-    if list(table.columns) != expected or table.isna().any().any():
+    if list(table.columns) != expected or (not allow_missing and table.isna().any().any()):
         short = table[table.isna().any(axis=1)].index.tolist()[:5]
         raise ValueError(f"{path}: every day needs hours 1-24; incomplete days include {short}")
 
@@ -103,3 +130,12 @@ def synthetic_prices(year: int = 2024, seed: int = 0) -> pd.DataFrame:
     dips = rng.random(prices.shape) < 0.01
     prices[dips] -= rng.exponential(40, size=dips.sum())
     return pd.DataFrame(np.round(prices, 2), index=pd.Index(days, name="date"), columns=range(HOURS))
+
+
+def synthetic_predispatch(prices: pd.DataFrame, seed: int = 1) -> dict:
+    """Made-up pre-dispatch prices: the actual price plus noise that grows with the lead time.
+
+    For testing the code only.
+    """
+    rng = np.random.default_rng(seed)
+    return {k: prices + rng.normal(0, 4 + 3 * k, size=prices.shape) for k in (1, 2, 3)}

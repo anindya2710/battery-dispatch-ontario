@@ -23,6 +23,10 @@ charging and discharging at the same time (burning energy in the losses) pay.
 
 The model is built once with the prices as a mutable parameter, then re-solved
 for each day, which is much faster than rebuilding it 366 times.
+
+The starting state of charge is a parameter too. It is the daily start level
+unless `solve` is given another, which lets the same model plan the rest of a
+day from wherever the battery is now (see rolling.py).
 """
 from dataclasses import dataclass
 
@@ -49,13 +53,14 @@ class DailyDispatchModel:
         m = pyo.ConcreteModel()
         m.T = pyo.RangeSet(0, hours - 1)
         m.price = pyo.Param(m.T, mutable=True, initialize=0.0)
+        m.s0 = pyo.Param(mutable=True, initialize=b.s_start)
 
         m.c = pyo.Var(m.T, bounds=(0, b.power_mw))
         m.d = pyo.Var(m.T, bounds=(0, b.power_mw))
         m.s = pyo.Var(m.T, bounds=(b.s_min, b.s_max))
 
         def balance(m, t):
-            previous = b.s_start if t == 0 else m.s[t - 1]
+            previous = m.s0 if t == 0 else m.s[t - 1]
             return m.s[t] == previous + b.eta_c * m.c[t] - m.d[t] / b.eta_d
         m.balance = pyo.Constraint(m.T, rule=balance)
 
@@ -75,14 +80,17 @@ class DailyDispatchModel:
         self.model = m
         self.solver = pyo.SolverFactory("appsi_highs")
 
-    def solve(self, prices) -> Schedule:
-        """Best schedule for one day of prices (a sequence of `hours` numbers)."""
+    def solve(self, prices, s0: float = None) -> Schedule:
+        """Best schedule for `hours` prices, starting from s0 (default: the daily start level)."""
         prices = np.asarray(prices, dtype=float)
         if prices.shape != (self.hours,):
             raise ValueError(f"expected {self.hours} prices, got shape {prices.shape}")
         m = self.model
         for t in m.T:
             m.price[t] = float(prices[t])
+        b = self.battery
+        start = b.s_start if s0 is None else float(s0)
+        m.s0 = min(max(start, b.s_min), b.s_max)     # absorb rounding at the limits
 
         result = self.solver.solve(m)
         if result.solver.termination_condition != pyo.TerminationCondition.optimal:

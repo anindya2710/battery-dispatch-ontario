@@ -39,3 +39,37 @@ def value_of_information(summary: pd.DataFrame) -> float:
 def value_of_optimization(summary: pd.DataFrame) -> float:
     """What optimizing on a naive forecast adds over the tuned threshold rule."""
     return float(summary.loc["persistence", "net_revenue"] - summary.loc["threshold rule", "net_revenue"])
+
+
+def paired_gap_interval(daily: pd.DataFrame, a: str, b: str, block_days: int = 7,
+                        n_boot: int = 10_000, level: float = 0.95, seed: int = 0) -> dict:
+    """How sure can we be about the total revenue gap between strategies a and b?
+
+    The gap is taken day by day (a minus b on the same day, so both face the same
+    prices), then resampled in blocks of `block_days` consecutive days, so that
+    any day-to-day dependence in prices is kept inside each block (a moving-block
+    bootstrap). Returns the observed total gap, the interval, and the share of
+    resamples in which a came out ahead.
+    """
+    wide = daily.pivot(index="date", columns="strategy", values="net_revenue").sort_index()
+    diff = (wide[a] - wide[b]).to_numpy()
+    n = len(diff)
+    if n == 0:
+        raise ValueError("no days to compare")
+    L = max(1, min(block_days, n))
+    rng = np.random.default_rng(seed)
+    starts = rng.integers(0, n - L + 1, size=(n_boot, int(np.ceil(n / L))))
+    idx = (starts[:, :, None] + np.arange(L)[None, None, :]).reshape(n_boot, -1)[:, :n]
+    totals = diff[idx].sum(axis=1)
+    tail = 100 * (1 - level) / 2
+    low, high = np.percentile(totals, [tail, 100 - tail])
+    return {
+        "gap": float(diff.sum()),
+        "low": float(low),
+        "high": float(high),
+        "level": level,
+        "days": n,
+        "days_a_ahead": int((diff > 1e-9).sum()),
+        "days_b_ahead": int((diff < -1e-9).sum()),
+        "share_resamples_a_ahead": float((totals > 0).mean()),
+    }

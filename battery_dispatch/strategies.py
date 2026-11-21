@@ -44,21 +44,25 @@ def threshold(prices: np.ndarray, low: float, high: float, battery: Battery) -> 
 
 
 def tune_threshold(prices: np.ndarray, battery: Battery,
-                   low_percentiles=range(5, 50, 5), high_percentiles=range(55, 100, 5)):
+                   low_percentiles=range(5, 50, 5), high_percentiles=range(55, 100, 5),
+                   decision_prices: np.ndarray = None):
     """Pick the (low, high) price pair that earned the most on `prices`.
 
-    Candidates are percentiles of the tuning prices. Only the tuning period is
-    seen here; the chosen pair is then applied unchanged to later data.
+    Candidates are percentiles of the prices the rule acts on: `decision_prices`
+    if given (for example pre-dispatch prices), otherwise `prices` themselves.
+    Revenue is always settled at `prices`, the actual prices. Only the tuning
+    period is seen here; the chosen pair is then applied unchanged to later data.
     Returns (low, high, net revenue on the tuning data, (low_pct, high_pct)).
     """
-    flat = prices.ravel()
+    decide = prices if decision_prices is None else decision_prices
+    flat = decide.ravel()
     best = None
     for lp in low_percentiles:
         low = float(np.percentile(flat, lp))
         for hp in high_percentiles:
             high = float(np.percentile(flat, hp))
-            net = sum(settle(threshold_schedule(day, low, high, battery), day, battery)["net_revenue"]
-                      for day in prices)
+            net = sum(settle(threshold_schedule(seen, low, high, battery), day, battery)["net_revenue"]
+                      for seen, day in zip(decide, prices))
             if best is None or net > best[2]:
                 best = (low, high, net, (lp, hp))
     return best

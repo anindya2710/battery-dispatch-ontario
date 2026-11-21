@@ -1,5 +1,9 @@
 """Run the whole analysis and write results/summary.md, a daily CSV and three figures.
 
+If the price file has IESO's pre-dispatch columns (the yearly HOEP report does), it
+also runs the fair comparison in battery_dispatch/rolling.py, which takes a few
+minutes because the optimizer re-plans every hour.
+
     python run.py --prices data/raw/PUB_PriceHOEPPredispOR_2024.csv
     python run.py --synthetic                 # made-up prices, to check the code runs
 
@@ -13,15 +17,20 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from battery_dispatch import plots
 from battery_dispatch.battery import Battery
-from battery_dispatch.data import describe_prices, load_ieso_hoep, synthetic_prices
-from battery_dispatch.evaluate import daily_results, summarize, value_of_information, value_of_optimization
+from battery_dispatch.data import (describe_prices, load_ieso_hoep, load_ieso_predispatch, synthetic_predispatch,
+                                  synthetic_prices)
+from battery_dispatch.evaluate import (daily_results, paired_gap_interval, summarize, value_of_information,
+                                      value_of_optimization)
+from battery_dispatch.rolling import fill_with_persistence, rolling_optimizer
 from battery_dispatch.strategies import perfect_foresight, persistence, threshold, tune_threshold
 
 PF, PERSIST, RULE = "perfect foresight", "persistence", "threshold rule"
+OPT_PD, RULE_PD = "optimizer, pre-dispatch", "threshold rule, pre-dispatch"
 
 
 def money(x):
@@ -54,14 +63,21 @@ def main():
     ap.add_argument("--sweep-kappa", default=None, help="comma-separated degradation costs to sweep")
     ap.add_argument("--lp-check", action="store_true", help="also solve without the binary variables")
     ap.add_argument("--out", default=None, help="output folder (default results/ or results/synthetic/)")
+    ap.add_argument("--no-predispatch", action="store_true", help="skip the fair comparison on pre-dispatch prices")
     args = ap.parse_args()
 
     if args.synthetic:
         prices, source = synthetic_prices(), "SYNTHETIC prices (made up). Nothing below is a result."
+        predispatch = synthetic_predispatch(prices)
         out = Path(args.out or "results/synthetic")
     else:
         prices, source = load_ieso_hoep(args.prices), f"IESO HOEP, file `{Path(args.prices).name}`"
+        predispatch = load_ieso_predispatch(args.prices)
         out = Path(args.out or "results")
+    if args.no_predispatch:
+        predispatch = None
+    if predispatch is not None:
+        predispatch = {k: v.reindex(prices.index).to_numpy() for k, v in predispatch.items()}
     (out / "figures").mkdir(parents=True, exist_ok=True)
 
     battery = Battery(degradation_cost=args.kappa)
@@ -79,19 +95,34 @@ def main():
     ps = persistence(pf, battery)
     low, high, tune_net, pcts = tune_threshold(P[in_tune], battery)
     th = threshold(P, low, high, battery)
+    if predispatch is not None:
+        seen = fill_with_persistence(predispatch[1], P)        # what the rule acts on
+        low_pd, high_pd, _, pcts_pd = tune_threshold(P[in_tune], battery, decision_prices=seen[in_tune])
+        th_pd = threshold(seen, low_pd, high_pd, battery)
+        t1 = time.perf_counter()
+        opt_pd = rolling_optimizer(P, predispatch, battery)
+        rolling_seconds = time.perf_counter() - t1
+        missing_pd = int(sum(np.isnan(v).sum() for v in predispatch.values()))
+        over = seen - P                                         # 1-hour-ahead forecast error
+        bias_share, bias_mean = float((over > 0).mean()), float(over.mean())
 
     # 2. Settle everything at actual prices.
-    daily = pd.concat([
+    parts = [
         daily_results(PF, pf, prices, battery),
         daily_results(PERSIST, ps, prices, battery),
         daily_results(RULE, th, prices, battery),
-    ], ignore_index=True)
+    ]
+    if predispatch is not None:
+        parts += [daily_results(OPT_PD, opt_pd, prices, battery), daily_results(RULE_PD, th_pd, prices, battery)]
+    daily = pd.concat(parts, ignore_index=True)
     daily.to_csv(out / "daily_results.csv", index=False)
 
-    full = summarize(daily[daily["strategy"] != RULE], battery)      # the rule saw part of this period
+    full = summarize(daily[~daily["strategy"].isin([RULE, RULE_PD])], battery)   # the rules were tuned on part of it
     test_daily = daily[daily["date"] > tune_until]
     test = summarize(test_daily, battery)
     voi_full, voi_test, voo_test = value_of_information(full), value_of_information(test), value_of_optimization(test)
+    voi_ci = paired_gap_interval(test_daily, PF, PERSIST)
+    voo_ci = paired_gap_interval(test_daily, PERSIST, RULE)
 
     # 3. Figures.
     test_start = prices.index[~in_tune][0]
@@ -124,8 +155,48 @@ def main():
         f"({pcts[0]}th percentile), discharge at or above ${high:.2f} ({pcts[1]}th percentile).", "",
         table(test), "",
         f"- Value of information (perfect foresight minus persistence): **{dollars(voi_test)}**",
-        f"- Value of optimization (persistence minus threshold rule): **{dollars(voo_test)}**", "",
+        f"- Persistence minus threshold rule: **{dollars(voo_test)}**. This is not a fair test of optimization: "
+        "the rule acts on each hour's actual price, which the persistence plan never sees.", "",
+        "### How sure are these two numbers?", "",
+        "Each gap is taken day by day (both strategies face the same prices), and the daily gaps are "
+        "resampled in blocks of 7 consecutive days, 10,000 times (a moving-block bootstrap).", "",
+        f"- Value of information: {dollars(voi_ci['gap'])}, 95% interval {dollars(voi_ci['low'])} to "
+        f"{dollars(voi_ci['high'])}",
+        f"- Persistence minus threshold rule: {dollars(voo_ci['gap'])}, 95% interval {dollars(voo_ci['low'])} to "
+        f"{dollars(voo_ci['high'])}. Persistence earned more on {voo_ci['days_a_ahead']} of {voo_ci['days']} days, "
+        f"the rule on {voo_ci['days_b_ahead']}; persistence came out ahead in "
+        f"{voo_ci['share_resamples_a_ahead']:.0%} of resamples.", "",
     ]
+
+    if predispatch is not None:
+        fair_ci = paired_gap_interval(test_daily, OPT_PD, RULE_PD)
+        replan_ci = paired_gap_interval(test_daily, OPT_PD, PERSIST)
+        replan_year = paired_gap_interval(daily, OPT_PD, PERSIST)
+        md += [
+            "## Fair comparison: both strategies on pre-dispatch prices (test period)", "",
+            "Both strategies now act only on what was known before each hour started. The rule charges or "
+            "discharges on IESO's 1-hour-ahead pre-dispatch price. The optimizer re-plans the rest of the day at "
+            "the start of every hour, using the 1-, 2- and 3-hour-ahead pre-dispatch prices for the next three "
+            "hours and yesterday's prices after that, and carries out only the first hour of each plan. Both are "
+            "settled at actual prices.", "",
+            f"Rule tuned on pre-dispatch prices up to {tune_until:%d %b %Y}: charge at or below ${low_pd:.2f} "
+            f"({pcts_pd[0]}th percentile), discharge at or above ${high_pd:.2f} ({pcts_pd[1]}th percentile). "
+            f"{missing_pd} missing pre-dispatch values were filled with yesterday's price. "
+            f"The optimizer solved {24 * (len(P) - 1):,} hourly MILPs in {rolling_seconds:.0f} s. "
+            f"Over the year, the 1-hour-ahead pre-dispatch price was above the actual price in {bias_share:.0%} "
+            f"of hours, by ${bias_mean:.2f}/MWh on average.", "",
+            table(test.loc[[n for n in [PF, OPT_PD, RULE_PD, PERSIST] if n in test.index]]), "",
+            f"- Optimizer minus rule, both on pre-dispatch prices (the value of optimization): "
+            f"**{dollars(fair_ci['gap'])}**, 95% interval {dollars(fair_ci['low'])} to {dollars(fair_ci['high'])}. "
+            f"The optimizer earned more on {fair_ci['days_a_ahead']} of {fair_ci['days']} days, the rule on "
+            f"{fair_ci['days_b_ahead']}; the optimizer came out ahead in {fair_ci['share_resamples_a_ahead']:.0%} "
+            "of resamples.",
+            f"- Re-planning hourly on pre-dispatch prices instead of committing to yesterday's plan: "
+            f"**{dollars(replan_ci['gap'])}**, 95% interval {dollars(replan_ci['low'])} to "
+            f"{dollars(replan_ci['high'])}. Over the whole year (the optimizer is not tuned, so the first half "
+            f"is fair to include): {dollars(replan_year['gap'])}, 95% interval {dollars(replan_year['low'])} to "
+            f"{dollars(replan_year['high'])}.", "",
+        ]
 
     if args.sweep_kappa:
         md += ["## Degradation cost sweep (whole period)", "",

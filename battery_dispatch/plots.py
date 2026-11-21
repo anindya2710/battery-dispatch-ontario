@@ -6,12 +6,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-# Colour-blind-checked categorical colours (blue, orange, green).
+# Categorical colours in a fixed order (blue, orange, green, magenta, brown), one per
+# strategy. The two pre-dispatch strategies are also drawn dashed, so no pair of lines
+# depends on colour alone (the closest pair under colour-vision deficiency is orange
+# and magenta).
 COLOURS = {
     "perfect foresight": "#2a78d6",
     "persistence": "#eb6834",
     "threshold rule": "#1baf7a",
+    "optimizer, pre-dispatch": "#d0479a",
+    "threshold rule, pre-dispatch": "#7a4a1e",
 }
+DASHED = {"optimizer, pre-dispatch", "threshold rule, pre-dispatch"}
 INK = "#0b0b0b"
 MUTED = "#6b6a66"
 GRID = "#e4e3df"
@@ -38,7 +44,8 @@ def cumulative_revenue(daily: pd.DataFrame, path, title: str):
         if d.empty:
             continue
         cum = d["net_revenue"].cumsum() / 1000
-        ax.plot(d["date"], cum, color=colour, linewidth=2, label=name)
+        ax.plot(d["date"], cum, color=colour, linewidth=2, label=name,
+                linestyle="--" if name in DASHED else "-")
         ends.append((float(cum.iloc[-1]), d["date"].iloc[-1], name))
     # direct labels at the line ends, nudged apart if they would overlap
     ends.sort()

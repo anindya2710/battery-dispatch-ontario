@@ -17,7 +17,10 @@ The IESO Data Directory lists the same report under "Hourly Ontario Energy Price
 
 - Three comment lines starting with `\\`, then a header row.
 - Columns: `Date, Hour, HOEP, Hour 1 Predispatch, Hour 2 Predispatch, Hour 3 Predispatch,
-  OR 10 Min Sync, OR 10 Min non-sync, OR 30 Min`. Only `Date`, `Hour` and `HOEP` are used.
+  OR 10 Min Sync, OR 10 Min non-sync, OR 30 Min`. `Date`, `Hour` and `HOEP` drive the
+  main analysis; the three `Predispatch` columns drive the fair comparison. `Hour k
+  Predispatch` for hour h is IESO's projection of the price for hour h, published k hours
+  before hour h starts. The operating-reserve (`OR`) columns are not used.
 - `Hour` runs 1-24 and is hour ending (Hour 1 is 00:00-01:00), in Eastern Standard
   Time all year, so every day has 24 hours. 2024 is a leap year: 366 days, 8,784 hours.
 - Prices are in $/MWh and can be negative. Some predispatch fields are blank.

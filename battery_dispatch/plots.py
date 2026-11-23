@@ -6,18 +6,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-# Categorical colours in a fixed order (blue, orange, green, magenta, brown), one per
-# strategy. The two pre-dispatch strategies are also drawn dashed, so no pair of lines
-# depends on colour alone (the closest pair under colour-vision deficiency is orange
-# and magenta).
-COLOURS = {
-    "perfect foresight": "#2a78d6",
-    "persistence": "#eb6834",
-    "threshold rule": "#1baf7a",
-    "optimizer, pre-dispatch": "#d0479a",
-    "threshold rule, pre-dispatch": "#7a4a1e",
+from .strategies import OPT_1H, OPT_3H, PERSIST, PF, RULE, RULE_1H, RULE_3H
+
+# Colour marks the kind of strategy (blue, orange, green, magenta, in that fixed
+# order) and line style marks what it acts on: solid for actual or yesterday's
+# prices, dashed for the 1-hour-ahead pre-dispatch price, dotted for the
+# 3-hour-ahead one. No pair of lines depends on colour alone, and every line is
+# also named in the legend.
+BLUE, ORANGE, GREEN, MAGENTA = "#2a78d6", "#eb6834", "#1baf7a", "#d0479a"
+STYLES = {
+    PF: (BLUE, "-"),
+    PERSIST: (ORANGE, "-"),
+    RULE: (GREEN, "-"),
+    OPT_1H: (MAGENTA, "--"),
+    RULE_1H: (GREEN, "--"),
+    OPT_3H: (MAGENTA, ":"),
+    RULE_3H: (GREEN, ":"),
 }
-DASHED = {"optimizer, pre-dispatch", "threshold rule, pre-dispatch"}
+COLOURS = {name: colour for name, (colour, _) in STYLES.items()}
 INK = "#0b0b0b"
 MUTED = "#6b6a66"
 GRID = "#e4e3df"
@@ -39,13 +45,12 @@ def cumulative_revenue(daily: pd.DataFrame, path, title: str):
     fig, ax = plt.subplots(figsize=(9, 4.8), facecolor=SURFACE)
     _style(ax)
     ends = []
-    for name, colour in COLOURS.items():
+    for name, (colour, style) in STYLES.items():
         d = daily[daily["strategy"] == name].sort_values("date")
         if d.empty:
             continue
         cum = d["net_revenue"].cumsum() / 1000
-        ax.plot(d["date"], cum, color=colour, linewidth=2, label=name,
-                linestyle="--" if name in DASHED else "-")
+        ax.plot(d["date"], cum, color=colour, linewidth=2, label=name, linestyle=style)
         ends.append((float(cum.iloc[-1]), d["date"].iloc[-1], name))
     # direct labels at the line ends, nudged apart if they would overlap
     ends.sort()
@@ -59,20 +64,26 @@ def cumulative_revenue(daily: pd.DataFrame, path, title: str):
     ax.axhline(0, color=MUTED, linewidth=0.8)
     ax.set_ylabel("Cumulative net revenue (thousand $)", color=MUTED, fontsize=9)
     ax.set_title(title, loc="left", color=INK, fontsize=11)
-    ax.legend(frameon=False, fontsize=9, loc="upper left")
+    ax.legend(frameon=False, fontsize=8, loc="upper left", handlelength=3)
     ax.margins(x=0.02)
-    fig.subplots_adjust(right=0.74)
+    fig.subplots_adjust(right=0.66)
     fig.savefig(path, dpi=150)
     plt.close(fig)
 
 
-def sample_week(prices: pd.DataFrame, schedules: dict, start, path, title: str):
-    """Price on top, then one panel of net power (discharge minus charge) per strategy."""
+def sample_week(prices: pd.DataFrame, schedules: dict, start, path, title: str) -> bool:
+    """Price on top, then one panel of net power (discharge minus charge) per strategy.
+
+    Up to seven days from `start`, fewer if the data ends sooner. Returns False,
+    and draws nothing, if there are no days from `start` on.
+    """
     days = prices.loc[start: pd.Timestamp(start) + pd.Timedelta(days=6)]
+    if days.empty:
+        return False
     idx = [prices.index.get_loc(d) for d in days.index]
     hours = np.arange(days.size)
     names = [n for n in COLOURS if n in schedules]
-    fig, axes = plt.subplots(1 + len(names), 1, figsize=(9, 2.2 + 1.8 * len(names)), sharex=True,
+    fig, axes = plt.subplots(1 + len(names), 1, figsize=(9, 2.2 + 1.3 * len(names)), sharex=True,
                              facecolor=SURFACE, gridspec_kw={"height_ratios": [1.4] + [1] * len(names)})
     ax = axes[0]
     _style(ax)
@@ -95,6 +106,7 @@ def sample_week(prices: pd.DataFrame, schedules: dict, start, path, title: str):
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
+    return True
 
 
 def price_heatmap(prices: pd.DataFrame, path, title: str):

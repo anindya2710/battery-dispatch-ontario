@@ -79,6 +79,10 @@ class DailyDispatchModel:
 
         self.model = m
         self.solver = pyo.SolverFactory("appsi_highs")
+        # Solve to proven optimality. HiGHS otherwise stops once it is within
+        # 0.01% of the best possible value, which left the MILP $0.06 short of
+        # its LP relaxation over 2024 even though no hour had a negative price.
+        self.solver.options["mip_rel_gap"] = 0.0
 
     def solve(self, prices, s0: float = None) -> Schedule:
         """Best schedule for `hours` prices, starting from s0 (default: the daily start level)."""

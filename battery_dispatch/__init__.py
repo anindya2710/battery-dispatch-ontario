@@ -6,6 +6,8 @@ Suggested reading order:
   3. model.py       the daily optimization model (Pyomo + HiGHS)
   4. simulate.py    settling a schedule at actual prices; the threshold rule
   5. strategies.py  perfect foresight, persistence forecast, threshold rule
-  6. evaluate.py    revenue, cycles and the two "value of" numbers
-  7. plots.py       figures
+  6. rolling.py     hourly re-planning and rules on IESO pre-dispatch prices
+  7. evaluate.py    revenue, cycles, the value of information, bootstrap intervals
+  8. plots.py       figures
+  9. tracking.py    logging a backtest to MLflow
 """

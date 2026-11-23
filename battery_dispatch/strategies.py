@@ -7,12 +7,26 @@ persistence         optimize each day on YESTERDAY's prices (the simplest
                     forecast there is), then settle at today's actual prices.
 threshold rule      no optimization: charge below one price, discharge above
                     another. The two prices are tuned on the first part of the
-                    data and tested on the rest.
+                    data and tested on the rest. Here it acts on each hour's
+                    actual price, which is only known once the hour is over.
+re-planning optimizer and threshold rules on pre-dispatch prices: rolling.py.
 do nothing          zero, for reference.
 """
 import numpy as np
 
 from .battery import Battery
+
+# Strategy names, used in every table, figure and MLflow run.
+PF = "perfect foresight"
+PERSIST = "persistence"
+RULE = "threshold rule, actual prices"
+OPT_1H = "re-planning optimizer, 1-hour-ahead"
+RULE_1H = "threshold rule, 1-hour-ahead"
+OPT_3H = "re-planning optimizer, 3-hour-ahead"
+RULE_3H = "threshold rule, 3-hour-ahead"
+OPT_1H_UNBIASED = "re-planning optimizer, 1-hour-ahead, bias removed"
+OPT_3H_UNBIASED = "re-planning optimizer, 3-hour-ahead, bias removed"
+OPT_3H_EXACT = "re-planning optimizer, 3-hour-ahead, actual price as forecast"   # a check, not a strategy
 from .model import DailyDispatchModel, Schedule
 from .simulate import settle, threshold_schedule
 
@@ -43,13 +57,15 @@ def threshold(prices: np.ndarray, low: float, high: float, battery: Battery) -> 
     return [threshold_schedule(day, low, high, battery) for day in prices]
 
 
-def tune_threshold(prices: np.ndarray, battery: Battery,
-                   low_percentiles=range(5, 50, 5), high_percentiles=range(55, 100, 5),
+def tune_threshold(prices: np.ndarray, battery: Battery, percentiles=range(5, 100, 5),
                    decision_prices: np.ndarray = None):
     """Pick the (low, high) price pair that earned the most on `prices`.
 
     Candidates are percentiles of the prices the rule acts on: `decision_prices`
     if given (for example pre-dispatch prices), otherwise `prices` themselves.
+    Every pair of percentiles with low below high is tried, so the search is not
+    cut off on either side. (An earlier version only tried low percentiles up to
+    the 45th, and both rules picked the 45th: the edge of the search.)
     Revenue is always settled at `prices`, the actual prices. Only the tuning
     period is seen here; the chosen pair is then applied unchanged to later data.
     Returns (low, high, net revenue on the tuning data, (low_pct, high_pct)).
@@ -57,10 +73,11 @@ def tune_threshold(prices: np.ndarray, battery: Battery,
     decide = prices if decision_prices is None else decision_prices
     flat = decide.ravel()
     best = None
-    for lp in low_percentiles:
-        low = float(np.percentile(flat, lp))
-        for hp in high_percentiles:
-            high = float(np.percentile(flat, hp))
+    percentiles = sorted(percentiles)
+    for i, lp in enumerate(percentiles):
+        low = float(np.nanpercentile(flat, lp))
+        for hp in percentiles[i + 1:]:
+            high = float(np.nanpercentile(flat, hp))
             net = sum(settle(threshold_schedule(seen, low, high, battery), day, battery)["net_revenue"]
                       for seen, day in zip(decide, prices))
             if best is None or net > best[2]:

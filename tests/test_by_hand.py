@@ -14,7 +14,7 @@ import pytest
 
 from battery_dispatch.battery import Battery
 from battery_dispatch.data import load_ieso_hoep
-from battery_dispatch.evaluate import paired_gap_interval, summarize, value_of_information, value_of_optimization
+from battery_dispatch.evaluate import paired_gap_interval, summarize, value_of_information
 from battery_dispatch.model import DailyDispatchModel, Schedule
 from battery_dispatch.simulate import check_feasible, settle, threshold_schedule
 from battery_dispatch.strategies import tune_threshold
@@ -52,8 +52,10 @@ def test_settle_by_hand():
 
 # simulate.py: physical limits ----------------------------------------------
 
-def _schedule(charge, discharge):
-    return Schedule(np.asarray(charge, float), np.asarray(discharge, float), np.zeros(len(charge)))
+def _schedule(charge, discharge, battery=Battery()):
+    """A schedule whose reported state of charge is the one its charge and discharge imply."""
+    c, d = np.asarray(charge, float), np.asarray(discharge, float)
+    return Schedule(c, d, battery.s_start + np.cumsum(battery.eta_c * c - d / battery.eta_d))
 
 
 def test_check_feasible_accepts_an_idle_day():
@@ -185,12 +187,6 @@ def test_summary_by_hand():
     assert (pf.losing_days, ps.losing_days) == (1, 0)
     assert ps.pct_of_reference == pytest.approx(80)
     assert value_of_information(s) == pytest.approx(5)
-
-
-def test_value_of_optimization_sign():
-    s = pd.DataFrame({"net_revenue": [100.0, 60.0, 70.0]},
-                     index=["perfect foresight", "persistence", "threshold rule"])
-    assert value_of_optimization(s) == pytest.approx(-10)      # the rule earned 10 more
 
 
 def _daily(gaps):

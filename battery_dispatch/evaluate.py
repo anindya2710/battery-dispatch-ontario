@@ -6,11 +6,17 @@ from .battery import Battery
 from .simulate import check_feasible, settle
 
 
-def daily_results(name: str, schedules: list, prices: pd.DataFrame, battery: Battery) -> pd.DataFrame:
-    """Settle every day's schedule at that day's actual prices."""
+def daily_results(name: str, schedules: list, prices: pd.DataFrame, battery: Battery,
+                  allow_simultaneous: bool = False) -> pd.DataFrame:
+    """Settle every day's schedule at that day's actual prices.
+
+    `schedules` has one schedule per row of `prices`, in the same order.
+    """
+    if len(schedules) != len(prices):
+        raise ValueError(f"{len(schedules)} schedules for {len(prices)} days")
     rows = []
     for date, day_prices, schedule in zip(prices.index, prices.to_numpy(), schedules):
-        check_feasible(schedule, battery)
+        check_feasible(schedule, battery, allow_simultaneous=allow_simultaneous)
         rows.append({"date": date, "strategy": name, **settle(schedule, day_prices, battery)})
     return pd.DataFrame(rows)
 
@@ -34,11 +40,6 @@ def summarize(daily: pd.DataFrame, battery: Battery, reference: str = "perfect f
 def value_of_information(summary: pd.DataFrame) -> float:
     """What a perfect forecast would add over the persistence forecast."""
     return float(summary.loc["perfect foresight", "net_revenue"] - summary.loc["persistence", "net_revenue"])
-
-
-def value_of_optimization(summary: pd.DataFrame) -> float:
-    """What optimizing on a naive forecast adds over the tuned threshold rule."""
-    return float(summary.loc["persistence", "net_revenue"] - summary.loc["threshold rule", "net_revenue"])
 
 
 def paired_gap_interval(daily: pd.DataFrame, a: str, b: str, block_days: int = 7,

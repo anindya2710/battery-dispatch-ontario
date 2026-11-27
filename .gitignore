@@ -8,3 +8,5 @@ venv/
 data/raw/*.csv
 # runs on made-up prices are not results
 results/synthetic/
+*.egg-info/
+.ruff_cache/

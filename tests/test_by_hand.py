@@ -21,6 +21,7 @@ from battery_dispatch.strategies import tune_threshold
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ieso_sample.csv"
 ETA = sqrt(0.88)
+DEFAULT_BATTERY = Battery()
 
 
 # battery.py ---------------------------------------------------------------
@@ -52,7 +53,7 @@ def test_settle_by_hand():
 
 # simulate.py: physical limits ----------------------------------------------
 
-def _schedule(charge, discharge, battery=Battery()):
+def _schedule(charge, discharge, battery=DEFAULT_BATTERY):
     """A schedule whose reported state of charge is the one its charge and discharge imply."""
     c, d = np.asarray(charge, float), np.asarray(discharge, float)
     return Schedule(c, d, battery.s_start + np.cumsum(battery.eta_c * c - d / battery.eta_d))
@@ -72,6 +73,20 @@ def test_check_feasible_accepts_an_idle_day():
 def test_check_feasible_refuses_each_kind_of_violation(charge, discharge):
     with pytest.raises(ValueError):
         check_feasible(_schedule(charge, discharge), Battery())
+
+
+def test_feasibility_check_refuses_simultaneous_trades_and_wrong_soc():
+    b = Battery()
+    c, d = np.zeros(24), np.zeros(24)
+    c[0], d[0], d[1] = 0.5, 0.2, 0.0
+    d[1] = 0.5 * b.eta_c * b.eta_d - 0.2       # end the day where it began
+    soc = b.s_start + np.cumsum(b.eta_c * c - d / b.eta_d)
+    with pytest.raises(ValueError, match="same hour"):
+        check_feasible(Schedule(c, d, soc), b)
+    check_feasible(Schedule(c, d, soc), b, allow_simultaneous=True)
+    idle = np.zeros(24)
+    with pytest.raises(ValueError, match="reported state of charge"):
+        check_feasible(Schedule(idle, idle, np.zeros(24)), b)
 
 
 # model.py ------------------------------------------------------------------
@@ -150,7 +165,7 @@ def test_tuning_finds_the_obvious_thresholds():
 def test_loader_reads_thousands_separators(tmp_path):
     # A $1,234.56 spike written with a comma inside quotes, as spreadsheets do.
     lines = FIXTURE.read_text().splitlines()
-    first = next(i for i, l in enumerate(lines) if l.startswith("2024-01-01,5,"))
+    first = next(i for i, line in enumerate(lines) if line.startswith("2024-01-01,5,"))
     parts = lines[first].split(",")
     lines[first] = ",".join(parts[:2] + ['"1,234.56"'] + parts[3:])
     path = tmp_path / "spike.csv"
@@ -160,7 +175,7 @@ def test_loader_reads_thousands_separators(tmp_path):
 
 def test_loader_refuses_duplicate_hours(tmp_path):
     lines = FIXTURE.read_text().splitlines()
-    dup = next(l for l in lines if l.startswith("2024-01-01,5,"))
+    dup = next(line for line in lines if line.startswith("2024-01-01,5,"))
     path = tmp_path / "dup.csv"
     path.write_text("\n".join(lines + [dup]) + "\n")
     with pytest.raises(ValueError):
@@ -175,7 +190,7 @@ def test_summary_by_hand():
     # $/kW-year for 25 over 4 days on a 1 MW (1,000 kW) battery: 25 / 1000 x 365 / 4 = 2.28125.
     dates = pd.date_range("2024-07-01", periods=4)
     rows = [{"date": d, "strategy": "perfect foresight", "market_revenue": v, "degradation_cost": 0.0,
-             "net_revenue": v, "cycles": c} for d, v, c in zip(dates, [10, -5, 20, 0], [1, 1, 1, 0])]
+             "net_revenue": v, "cycles": c} for d, v, c in zip(dates, [10, -5, 20, 0], [1, 1, 1, 0], strict=False)]
     rows += [{"date": d, "strategy": "persistence", "market_revenue": 5.0, "degradation_cost": 0.0,
               "net_revenue": 5.0, "cycles": 0.0} for d in dates]
     s = summarize(pd.DataFrame(rows), Battery())
@@ -191,7 +206,7 @@ def test_summary_by_hand():
 
 def _daily(gaps):
     dates = pd.date_range("2024-07-01", periods=len(gaps))
-    a = [{"date": d, "strategy": "a", "net_revenue": 10.0 + g} for d, g in zip(dates, gaps)]
+    a = [{"date": d, "strategy": "a", "net_revenue": 10.0 + g} for d, g in zip(dates, gaps, strict=False)]
     b = [{"date": d, "strategy": "b", "net_revenue": 10.0} for d in dates]
     return pd.DataFrame(a + b)
 

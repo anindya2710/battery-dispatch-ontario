@@ -7,7 +7,13 @@ import pytest
 from battery_dispatch.battery import Battery
 from battery_dispatch.data import load_ieso_predispatch
 from battery_dispatch.model import DailyDispatchModel
-from battery_dispatch.rolling import fill_with_persistence, rolling_optimizer
+from battery_dispatch.rolling import (
+    ONE_HOUR_AHEAD,
+    THREE_HOURS_AHEAD,
+    fill_with_persistence,
+    remove_bias,
+    rolling_optimizer,
+)
 from battery_dispatch.simulate import check_feasible, settle
 from battery_dispatch.strategies import tune_threshold
 
@@ -62,7 +68,49 @@ def test_rolling_schedules_are_feasible_with_bad_forecasts():
         check_feasible(schedule, b)
 
 
-def test_tuning_on_the_actual_prices_is_unchanged_by_the_new_option():
+def test_tune_threshold_defaults_decision_prices_to_actual_prices():
     b = Battery()
     prices = np.random.default_rng(2).normal(35, 25, size=(6, 24))
     assert tune_threshold(prices, b) == tune_threshold(prices, b, decision_prices=prices)
+
+
+def test_missing_forecast_on_day_zero_is_left_missing():
+    actual = np.array([[10.0, 20.0], [30.0, 40.0]])
+    forecast = np.array([[np.nan, 21.0], [np.nan, 41.0]])
+    filled = fill_with_persistence(forecast, actual)
+    assert np.isnan(filled[0, 0])               # no yesterday, and today's actual would be a leak
+    assert filled[1, 0] == 10.0                 # yesterday, same hour
+
+
+def test_bias_removal_uses_only_earlier_days():
+    actual = np.full((4, 3), 50.0)
+    forecast = actual + 5.0
+    forecast[2] += 95.0                         # day 2 is off by 100
+    out = remove_bias(forecast, actual)
+    assert out[0] == pytest.approx(forecast[0])                      # no history yet
+    assert out[1] == pytest.approx(actual[1])                        # bias from day 0: 5
+    assert out[2] == pytest.approx(forecast[2] - 5.0)                # days 0-1 only, not day 2 itself
+    assert out[3] == pytest.approx(forecast[3] - (5 + 5 + 100) / 3)  # days 0-2
+
+
+def test_three_hour_timing_ignores_the_later_forecasts():
+    # With ahead=(3,), the 1- and 2-hour-ahead prices must make no difference.
+    b = Battery()
+    rng = np.random.default_rng(3)
+    actual = rng.normal(35, 25, size=(3, 24))
+    pd3 = actual + rng.normal(0, 10, size=actual.shape)
+    a = rolling_optimizer(actual, {1: actual * 0, 2: actual * 0, 3: pd3}, b, THREE_HOURS_AHEAD)
+    c = rolling_optimizer(actual, {1: actual + 500, 2: actual - 500, 3: pd3}, b, THREE_HOURS_AHEAD)
+    for x, y in zip(a, c, strict=False):
+        assert x.charge == pytest.approx(y.charge) and x.discharge == pytest.approx(y.discharge)
+
+
+def test_rolling_optimizer_defaults_to_one_hour_ahead():
+    b = Battery()
+    rng = np.random.default_rng(5)
+    actual = rng.normal(35, 25, size=(3, 24))
+    pdx = {k: actual + rng.normal(0, 10, size=actual.shape) for k in (1, 2, 3)}
+    default = rolling_optimizer(actual, pdx, b)
+    explicit = rolling_optimizer(actual, pdx, b, ONE_HOUR_AHEAD)
+    for x, y in zip(default, explicit, strict=False):
+        assert x.charge == pytest.approx(y.charge) and x.discharge == pytest.approx(y.discharge)

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "battery-dispatch-ontario"
+version = "0.1.0"
+description = "Battery storage dispatch against Ontario electricity prices, as a mixed-integer linear program with a backtest that separates forecast value from optimization value"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["optimization", "mixed-integer-programming", "energy-storage", "electricity-markets", "backtesting"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    "pyomo>=6.8",
+    "highspy>=1.8",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "matplotlib>=3.8",
+    "mlflow>=2.16",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4"]
+
+[project.urls]
+Homepage = "https://github.com/anindya2710/battery-dispatch-ontario"
+Issues = "https://github.com/anindya2710/battery-dispatch-ontario/issues"
+
+[tool.setuptools.packages.find]
+include = ["battery_dispatch*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# matplotlib.use("Agg") and pytest.importorskip("mlflow") have to run before the
+# imports they govern, so module-level imports cannot all sit at the top.
+"tests/test_plots.py" = ["E402"]
+"tests/test_tracking.py" = ["E402"]

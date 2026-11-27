@@ -27,14 +27,37 @@ import pandas as pd
 
 from battery_dispatch import plots
 from battery_dispatch.battery import Battery
-from battery_dispatch.data import (describe_prices, load_ieso_hoep, load_ieso_predispatch, synthetic_predispatch,
-                                  synthetic_prices)
+from battery_dispatch.data import (
+    describe_prices,
+    load_ieso_hoep,
+    load_ieso_predispatch,
+    synthetic_predispatch,
+    synthetic_prices,
+)
 from battery_dispatch.evaluate import daily_results, paired_gap_interval, summarize
-from battery_dispatch.rolling import (ONE_HOUR_AHEAD, THREE_HOURS_AHEAD, fill_with_persistence, remove_bias,
-                                      rolling_optimizer)
-from battery_dispatch.strategies import (OPT_1H, OPT_1H_UNBIASED, OPT_3H, OPT_3H_EXACT, OPT_3H_UNBIASED, PERSIST, PF,
-                                         RULE, RULE_1H, RULE_3H, perfect_foresight, persistence, threshold,
-                                         tune_threshold)
+from battery_dispatch.rolling import (
+    ONE_HOUR_AHEAD,
+    THREE_HOURS_AHEAD,
+    fill_with_persistence,
+    remove_bias,
+    rolling_optimizer,
+)
+from battery_dispatch.strategies import (
+    OPT_1H,
+    OPT_1H_UNBIASED,
+    OPT_3H,
+    OPT_3H_EXACT,
+    OPT_3H_UNBIASED,
+    PERSIST,
+    PF,
+    RULE,
+    RULE_1H,
+    RULE_3H,
+    perfect_foresight,
+    persistence,
+    threshold,
+    tune_threshold,
+)
 
 UNTUNED = [PF, PERSIST, OPT_1H, OPT_3H]                       # nothing fitted to the data
 MAIN = [PF, PERSIST, RULE, OPT_1H, RULE_1H, OPT_3H, RULE_3H]    # the strategies compared
@@ -145,7 +168,7 @@ def main():
         errors = []                                        # forecast minus actual, real forecasts only
         for k in sorted(predispatch):
             e = predispatch[k] - P
-            first, second = e[in_tune], e[~in_tune]
+            first, second = e[tune_days], e[~in_tune]
             errors.append({"horizon": k, "share_above": float((e[~np.isnan(e)] > 0).mean()),
                            "mean": float(np.nanmean(e)), "mean_tuning": float(np.nanmean(first)),
                            "mean_test": float(np.nanmean(second))})
@@ -171,8 +194,10 @@ def main():
             "replanning_3h_minus_persistence_test": paired_gap_interval(test_daily, OPT_3H, PERSIST),
             "replanning_1h_minus_persistence_year": paired_gap_interval(daily, OPT_1H, PERSIST),
             "replanning_3h_minus_persistence_year": paired_gap_interval(daily, OPT_3H, PERSIST),
-            "replanning_1h_bias_removed_minus_persistence_test": paired_gap_interval(test_daily, OPT_1H_UNBIASED, PERSIST),
-            "replanning_3h_bias_removed_minus_persistence_test": paired_gap_interval(test_daily, OPT_3H_UNBIASED, PERSIST),
+            "replanning_1h_bias_removed_minus_persistence_test":
+              paired_gap_interval(test_daily, OPT_1H_UNBIASED, PERSIST),
+            "replanning_3h_bias_removed_minus_persistence_test":
+              paired_gap_interval(test_daily, OPT_3H_UNBIASED, PERSIST),
             "replanning_3h_actual_price_minus_persistence_test": paired_gap_interval(test_daily, OPT_3H_EXACT, PERSIST),
             "replanning_3h_actual_price_minus_forecast_test": paired_gap_interval(test_daily, OPT_3H_EXACT, OPT_3H),
         })
@@ -208,7 +233,8 @@ def main():
         f"- Evaluated: {evaluated.index[0]:%Y-%m-%d} to {evaluated.index[-1]:%Y-%m-%d} ({len(evaluated)} days). "
         "The first day only serves as \"yesterday\" for the second.",
         f"- Battery: {b.power_mw:g} MW / {b.energy_mwh:g} MWh, round-trip efficiency {b.round_trip_eff:.0%}, "
-        f"state of charge {b.soc_min_frac:.0%}-{b.soc_max_frac:.0%}, each day starts and ends at {b.soc_start_frac:.0%}",
+        f"state of charge {b.soc_min_frac:.0%}-{b.soc_max_frac:.0%}, each day starts and ends at "
+        f"{b.soc_start_frac:.0%}",
         f"- Wear cost: ${b.degradation_cost:g} per MWh charged or discharged",
         "- Price-taker, energy arbitrage only, no fees, charges or other revenue streams",
         f"- {len(pf)} daily MILPs solved in {solve_seconds:.1f} s", "",
@@ -267,12 +293,14 @@ def main():
             "re-planning optimizer's test-period revenue as follows:", "",
             f"- 1-hour-ahead: {dollars(test_daily.loc[test_daily.strategy == OPT_1H, 'net_revenue'].sum())} as "
             f"published, {dollars(test_daily.loc[test_daily.strategy == OPT_1H_UNBIASED, 'net_revenue'].sum())} with "
-            f"the bias removed; minus persistence, {dollars(ci['replanning_1h_bias_removed_minus_persistence_test']['gap'])} "
+            f"the bias removed; minus persistence, "
+            f"{dollars(ci['replanning_1h_bias_removed_minus_persistence_test']['gap'])} "
             f"(95% interval {dollars(ci['replanning_1h_bias_removed_minus_persistence_test']['low'])} to "
             f"{dollars(ci['replanning_1h_bias_removed_minus_persistence_test']['high'])})",
             f"- 3-hour-ahead: {dollars(test_daily.loc[test_daily.strategy == OPT_3H, 'net_revenue'].sum())} as "
             f"published, {dollars(test_daily.loc[test_daily.strategy == OPT_3H_UNBIASED, 'net_revenue'].sum())} with "
-            f"the bias removed; minus persistence, {dollars(ci['replanning_3h_bias_removed_minus_persistence_test']['gap'])} "
+            f"the bias removed; minus persistence, "
+            f"{dollars(ci['replanning_3h_bias_removed_minus_persistence_test']['gap'])} "
             f"(95% interval {dollars(ci['replanning_3h_bias_removed_minus_persistence_test']['low'])} to "
             f"{dollars(ci['replanning_3h_bias_removed_minus_persistence_test']['high'])})", "",
             "As a check of the method, the 3-hour-ahead re-planning was also given each hour's actual price in "
@@ -301,7 +329,8 @@ def main():
     sweep_rows, lp_gap = [], None
     if args.sweep_kappa:
         replan = predispatch is not None
-        head = "| Wear cost ($/MWh) | Perfect foresight ($) | Cycles | Persistence ($) | Cycles | Persistence losing days |"
+        head = ("| Wear cost ($/MWh) | Perfect foresight ($) | Cycles | Persistence ($) | Cycles | "
+                "Persistence losing days |")
         line = "|---:|---:|---:|---:|---:|---:|"
         if replan:
             head += " Re-planning, 1-hour-ahead ($) | Re-planning, 3-hour-ahead ($) |"

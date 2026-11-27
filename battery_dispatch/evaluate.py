@@ -15,7 +15,7 @@ def daily_results(name: str, schedules: list, prices: pd.DataFrame, battery: Bat
     if len(schedules) != len(prices):
         raise ValueError(f"{len(schedules)} schedules for {len(prices)} days")
     rows = []
-    for date, day_prices, schedule in zip(prices.index, prices.to_numpy(), schedules):
+    for date, day_prices, schedule in zip(prices.index, prices.to_numpy(), schedules, strict=False):
         check_feasible(schedule, battery, allow_simultaneous=allow_simultaneous)
         rows.append({"date": date, "strategy": name, **settle(schedule, day_prices, battery)})
     return pd.DataFrame(rows)

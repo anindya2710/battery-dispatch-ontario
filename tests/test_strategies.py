@@ -8,11 +8,17 @@ import pytest
 from battery_dispatch.battery import Battery
 from battery_dispatch.data import describe_prices, load_ieso_hoep, synthetic_prices
 from battery_dispatch.evaluate import daily_results, summarize
-from battery_dispatch.model import DailyDispatchModel
+from battery_dispatch.model import DailyDispatchModel, Schedule
 from battery_dispatch.simulate import check_feasible, settle, threshold_schedule
 from battery_dispatch.strategies import perfect_foresight, persistence, threshold, tune_threshold
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ieso_sample.csv"
+
+# Two days with a high evening spike where the optimal charging threshold lies above the 50th percentile.
+HIGH_SPIKE_DAYS = np.array([
+    [49, 43, 36, 30, 25, 40, 34, 33, 38, 40, 22, 47, 24, 55, 45, 36, 51, 40, 106, 101, 109, 108, 33, 35],
+    [43, 38, 22, 56, 23, 23, 30, 45, 54, 38, 37, 41, 37, 41, 31, 44, 43, 21, 99, 101, 104, 93, 29, 32],
+], dtype=float)
 
 
 @pytest.fixture(scope="module")
@@ -33,14 +39,14 @@ def test_loader_reads_ieso_layout():
 def test_loader_refuses_a_day_with_a_missing_hour(tmp_path):
     lines = FIXTURE.read_text().splitlines()
     broken = tmp_path / "broken.csv"
-    broken.write_text("\n".join(l for l in lines if not l.startswith("2024-01-02,7,")) + "\n")
+    broken.write_text("\n".join(line for line in lines if not line.startswith("2024-01-02,7,")) + "\n")
     with pytest.raises(ValueError):
         load_ieso_hoep(broken)
 
 
 def test_loader_refuses_a_missing_day(tmp_path):
     lines = FIXTURE.read_text().splitlines()
-    third_day = [l.replace("2024-01-02", "2024-01-04") for l in lines if l.startswith("2024-01-02")]
+    third_day = [line.replace("2024-01-02", "2024-01-04") for line in lines if line.startswith("2024-01-02")]
     gap = tmp_path / "gap.csv"
     gap.write_text("\n".join(lines + third_day) + "\n")
     with pytest.raises(ValueError):
@@ -73,7 +79,7 @@ def test_perfect_foresight_is_an_upper_bound_every_day(prices):
     ps = persistence(pf, b)
     low, high, _, _ = tune_threshold(P[:20], b)
     th = threshold(P, low, high, b)
-    for day, a, c, d in zip(P, pf, ps, th):
+    for day, a, c, d in zip(P, pf, ps, th, strict=False):
         best = settle(a, day, b)["net_revenue"]
         assert best >= settle(c, day, b)["net_revenue"] - 1e-6
         assert best >= settle(d, day, b)["net_revenue"] - 1e-6
@@ -103,3 +109,59 @@ def test_summary_adds_up(prices):
     assert row.days == len(prices)
     assert row.pct_of_reference == pytest.approx(100)
     assert isinstance(daily["date"].iloc[0], pd.Timestamp)
+
+
+def test_tuning_searches_full_percentile_grid():
+    b = Battery()
+    _, _, net, (lp, hp) = tune_threshold(HIGH_SPIKE_DAYS, b)
+    restricted_best = max(tune_threshold(HIGH_SPIKE_DAYS, b, percentiles=[lo, hi])[2]
+                          for lo in range(5, 50, 5) for hi in range(55, 100, 5))
+    assert lp > 45 and lp < hp
+    assert net > restricted_best
+
+
+def test_tuning_only_tries_low_below_high():
+    seen = []
+    b = Battery()
+    import battery_dispatch.strategies as S
+    original = S.threshold_schedule
+    try:
+        def record(p, low, high, battery):
+            seen.append((low, high))
+            return original(p, low, high, battery)
+        S.threshold_schedule = record
+        tune_threshold(HIGH_SPIKE_DAYS, b, percentiles=[10, 50, 90])
+    finally:
+        S.threshold_schedule = original
+    pairs = sorted(set(seen))
+    assert len(pairs) == 3 and all(low < high for low, high in pairs)
+
+
+def test_rule_uses_the_whole_battery_when_the_day_starts_above_the_minimum():
+    # Start at 50%. A high price first, then cheap hours: the rule can discharge
+    # below the starting level, as long as it can refill before the day ends.
+    b = Battery(soc_start_frac=0.5)
+    day = [100.0] * 3 + [50.0] * 15 + [10.0] * 6
+    s = threshold_schedule(day, low=20, high=90, battery=b)
+    check_feasible(s, b)
+    assert s.soc.min() < b.s_start - 1                  # went well below the start level
+    assert s.soc[-1] == pytest.approx(b.s_start)
+    assert settle(s, day, b)["net_revenue"] > 0
+
+
+def test_rule_respects_floor_when_day_starts_at_minimum():
+    # When the day starts at the lower SoC limit, the rule never discharges below s_start.
+    b = Battery()
+    rng = np.random.default_rng(9)
+    for _ in range(20):
+        day = rng.normal(35, 30, size=24)
+        s = threshold_schedule(day, 20, 50, b)
+        assert s.soc.min() >= b.s_start - 1e-9
+        check_feasible(s, b)
+
+
+def test_daily_results_refuses_a_length_mismatch():
+    prices = pd.DataFrame(np.full((2, 24), 30.0), index=pd.date_range("2024-07-01", periods=2))
+    one = [Schedule(np.zeros(24), np.zeros(24), np.full(24, Battery().s_start))]
+    with pytest.raises(ValueError):
+        daily_results("x", one, prices, Battery())

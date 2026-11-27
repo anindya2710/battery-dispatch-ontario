@@ -90,7 +90,7 @@ def sample_week(prices: pd.DataFrame, schedules: dict, start, path, title: str) 
     ax.step(hours, days.to_numpy().ravel(), where="post", color=INK, linewidth=1.5)
     ax.set_ylabel("Price ($/MWh)", color=MUTED, fontsize=9)
     ax.set_title(title, loc="left", color=INK, fontsize=11)
-    for ax, name in zip(axes[1:], names):
+    for ax, name in zip(axes[1:], names, strict=False):
         _style(ax)
         net = np.concatenate([schedules[name][i].discharge - schedules[name][i].charge for i in idx])
         ax.bar(hours + 0.5, net, width=0.8, color=COLOURS[name])

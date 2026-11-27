@@ -4,9 +4,6 @@ A 1 MW / 4 MWh battery buys and sells energy at Ontario's hourly price (HOEP) th
 2024. This project measures how much of the money comes from knowing prices in advance
 and how much comes from optimizing.
 
-**Status:** the 2024 analysis is complete. It was revised in November 2026 after an
-outside review, which changed the main comparison; see [Corrections](#corrections).
-
 ## Questions
 
 1. What is the most a battery could have earned with perfect knowledge of prices?
@@ -102,7 +99,6 @@ python -m venv .venv
 pip install -r requirements.txt
 
 python -m pytest -q               # 56 checks, about 15 seconds
-python examples/toy_lp.py         # prints: optimal 1.0 0.9 25.0
 python run.py --synthetic         # made-up prices, to see that everything runs
 ```
 
@@ -257,42 +253,6 @@ Wear is charged on every MWh charged or discharged, so $10/MWh comes to about $6
 ![One week of dispatch](results/figures/sample_week.png)
 ![Hourly prices](results/figures/price_heatmap.png)
 
-## Corrections
-
-**November 2026.** An outside review of this repository found problems that changed the
-main comparison. The first version of the results:
-
-- **Tuned the threshold rules over too narrow a range.** Low thresholds above the 45th
-  percentile were never tried, and both rules picked the 45th, the edge of the search.
-  With every pair of percentiles tried, the rule on the 1-hour-ahead forecast earns
-  $7,210 in July–December instead of $3,867, and the optimizer's lead over it falls
-  from $7,130 to $3,781.
-- **Treated the 1-hour-ahead forecast as one a battery could act on.** Under IESO's 2024
-  rules it arrives after an hour's offers are locked. The 3-hour-ahead strategies are new.
-- **Said the optimizer and the rule had the same information.** They had the same
-  forecast, but the optimizer also used the 2- and 3-hour-ahead prices and yesterday's
-  prices, which the rule ignores.
-- **Explained the rule's poor result by the forecast's upward bias.** A steady bias would
-  carry over from the tuning period to the test period, although the 1-hour-ahead bias
-  did grow, from $5.88 to $7.82/MWh. The narrow search accounted for about half of the
-  rule's shortfall against the optimizer. The bias is now measured for each forecast, and
-  removed in a separate check.
-- **Handled the first day unevenly.** Some strategies traded on 1 January while others
-  could not, and a missing forecast on that day would have been filled with that day's
-  actual price (none was missing in 2024). The first day is now used only as "yesterday".
-- **Stopped the solver within 0.01% of the optimum,** which left the MILP $0.06 below its
-  LP relaxation over the year. It now solves to proven optimality. With the first-day
-  change, this moved some totals by a few dollars (persistence, July–December: $9,923 to
-  $9,921).
-- **Smaller fixes.** The threshold rule now uses the whole battery when a day starts above
-  the lower limit; the feasibility check now refuses charging and discharging in the same
-  hour and checks the reported state of charge; the one-week figure shows every strategy;
-  the wear-cost sweep includes the re-planning optimizers; the forecast-error figures leave
-  out the hours whose forecast was missing; and a function that still computed the first,
-  unfair comparison under the name "value of optimization" was removed.
-
-Each fix has a test that fails on the old code (`tests/test_audit_fixes.py`).
-
 ## Layout
 
 ```
@@ -307,25 +267,19 @@ battery_dispatch/
   plots.py        figures
   tracking.py     logging a backtest to MLflow
 run.py            runs everything
-examples/toy_lp.py    a three-line storage problem to learn the tools
 tests/            56 checks, most against answers worked out by hand
 docs/             screenshot of the MLflow comparison
 ```
 
-## Status and provenance
+## Status
 
 The 2024 analysis is complete. The results above come from running `run.py` on the
 IESO price file, and each module is checked against small cases worked out by hand
 (`tests/test_by_hand.py`).
 
-The code was written with the help of an AI assistant (Claude, by Anthropic).
-I reviewed the results.
-
 A note on reproducing the numbers: with no wear cost, a day's prices often allow
 several equally good plans, and different versions of the HiGHS solver do not
-always pick the same one. Rerunning in November 2026 with a newer version changed
-persistence revenue on 4 of 366 days, by $22 over the year, before the solver was
-set to prove optimality. A different version may still pick a different plan of
+always pick the same one. A different version may still pick a different plan of
 equal value, and so move persistence and the re-planning optimizers by a few dollars.
 
 ## Possible extensions

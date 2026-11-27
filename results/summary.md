@@ -63,9 +63,9 @@ Forecast minus actual price, over the hours that have a forecast:
 
 | Forecast | Above the actual price | Mean error ($/MWh) | Mean error, Jan-Jun | Mean error, Jul-Dec |
 |---|---:|---:|---:|---:|
-| 1-hour-ahead | 79% | +6.85 | +5.88 | +7.82 |
-| 2-hour-ahead | 77% | +6.40 | +5.31 | +7.48 |
-| 3-hour-ahead | 71% | +4.46 | +3.68 | +5.24 |
+| 1-hour-ahead | 79% | +6.85 | +5.90 | +7.82 |
+| 2-hour-ahead | 77% | +6.40 | +5.32 | +7.48 |
+| 3-hour-ahead | 71% | +4.46 | +3.69 | +5.24 |
 
 Removing the bias (subtracting each forecast's average error over all earlier days) changes the re-planning optimizer's test-period revenue as follows:
 

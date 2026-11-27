@@ -1,5 +1,6 @@
 """Checks on the optimization model against answers worked out by hand."""
 import numpy as np
+import pyomo.environ as pyo
 import pytest
 
 from battery_dispatch.battery import Battery
@@ -7,7 +8,7 @@ from battery_dispatch.model import DailyDispatchModel
 from battery_dispatch.simulate import check_feasible, settle
 
 
-def test_toy_problem_matches_lesson_one():
+def test_two_hour_storage_arbitrage_by_hand():
     # Buy up to 1 MWh at $20, lose 10% in storage, sell at $50: buy 1.0, sell 0.9, profit 25.
     # The 1 MW power limit over one hour is what caps the purchase at 1 MWh.
     toy = Battery(power_mw=1, energy_mwh=1, round_trip_eff=0.9, soc_min_frac=0, soc_max_frac=1, soc_start_frac=0)
@@ -69,3 +70,15 @@ def test_lp_relaxation_never_does_worse_than_milp():
     milp = settle(DailyDispatchModel(b, binary=True).solve(prices), prices, b)["net_revenue"]
     lp = settle(DailyDispatchModel(b, binary=False).solve(prices), prices, b)["net_revenue"]
     assert lp >= milp - 1e-6
+
+
+def test_milp_reaches_its_lp_relaxation_when_prices_are_positive():
+    # With no negative prices the binaries cannot bind, so solved to optimality the
+    # two objectives must agree to rounding.
+    b = Battery()
+    milp, lp = DailyDispatchModel(b), DailyDispatchModel(b, binary=False)
+    rng = np.random.default_rng(1)
+    for _ in range(5):
+        p = np.abs(rng.normal(40, 60, size=24)) + 1
+        milp.solve(p), lp.solve(p)
+        assert pyo.value(milp.model.profit) == pytest.approx(pyo.value(lp.model.profit), abs=1e-6)
